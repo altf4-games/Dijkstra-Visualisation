@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <limits.h>
 #include <stdbool.h>
+#include <stdlib.h>
 
 #define GRID_WIDTH 20
 #define GRID_HEIGHT 15
@@ -18,7 +19,24 @@ typedef struct {
     Vector2D prev;
 } Node;
 
+typedef struct {
+    Vector2D *nodes;
+    int *distances;
+    int size;
+} PriorityQueue;
+
 Node grid[GRID_WIDTH][GRID_HEIGHT];
+
+// Function prototypes
+void InitializeGrid();
+Vector2D GetMinDistanceNode(PriorityQueue *pq);
+void Dijkstra(Vector2D start, Vector2D end);
+void DrawShortestPath(Vector2D end);
+void HandleMouseInput(Vector2D *start, Vector2D *end, bool *recalculate);
+PriorityQueue *CreatePriorityQueue(int capacity);
+void Enqueue(PriorityQueue *pq, Vector2D node, int distance);
+Vector2D Dequeue(PriorityQueue *pq);
+bool IsEmpty(PriorityQueue *pq);
 
 void InitializeGrid() {
     for (int i = 0; i < GRID_WIDTH; i++) {
@@ -31,19 +49,74 @@ void InitializeGrid() {
     }
 }
 
-Vector2D GetMinDistanceNode(int dist[GRID_WIDTH][GRID_HEIGHT], bool sptSet[GRID_WIDTH][GRID_HEIGHT]) {
-    int min = INT_MAX;
-    Vector2D min_index = { -1, -1 };
+PriorityQueue *CreatePriorityQueue(int capacity) {
+    PriorityQueue *pq = (PriorityQueue *)malloc(sizeof(PriorityQueue));
+    pq->nodes = (Vector2D *)malloc(capacity * sizeof(Vector2D));
+    pq->distances = (int *)malloc(capacity * sizeof(int));
+    pq->size = 0;
+    return pq;
+}
 
-    for (int i = 0; i < GRID_WIDTH; i++) {
-        for (int j = 0; j < GRID_HEIGHT; j++) {
-            if (!sptSet[i][j] && dist[i][j] <= min && !grid[i][j].isWall) {
-                min = dist[i][j];
-                min_index = (Vector2D){ i, j };
-            }
+bool IsEmpty(PriorityQueue *pq) {
+    return pq->size == 0;
+}
+
+void Enqueue(PriorityQueue *pq, Vector2D node, int distance) {
+    pq->nodes[pq->size] = node;
+    pq->distances[pq->size] = distance;
+    pq->size++;
+    
+    // Bubble up to maintain min-heap property
+    for (int i = pq->size - 1; i > 0; i--) {
+        if (pq->distances[i] < pq->distances[(i - 1) / 2]) {
+            // Swap
+            Vector2D tempNode = pq->nodes[i];
+            pq->nodes[i] = pq->nodes[(i - 1) / 2];
+            pq->nodes[(i - 1) / 2] = tempNode;
+
+            int tempDist = pq->distances[i];
+            pq->distances[i] = pq->distances[(i - 1) / 2];
+            pq->distances[(i - 1) / 2] = tempDist;
+        } else {
+            break;
         }
     }
-    return min_index;
+}
+
+Vector2D Dequeue(PriorityQueue *pq) {
+    Vector2D minNode = pq->nodes[0];
+    pq->nodes[0] = pq->nodes[pq->size - 1];
+    pq->distances[0] = pq->distances[pq->size - 1];
+    pq->size--;
+
+    // Bubble down to maintain min-heap property
+    int index = 0;
+    while (index < pq->size / 2) {
+        int leftChild = 2 * index + 1;
+        int rightChild = 2 * index + 2;
+        int smallerChild = leftChild;
+
+        if (rightChild < pq->size && pq->distances[rightChild] < pq->distances[leftChild]) {
+            smallerChild = rightChild;
+        }
+
+        if (pq->distances[index] > pq->distances[smallerChild]) {
+            // Swap
+            Vector2D tempNode = pq->nodes[index];
+            pq->nodes[index] = pq->nodes[smallerChild];
+            pq->nodes[smallerChild] = tempNode;
+
+            int tempDist = pq->distances[index];
+            pq->distances[index] = pq->distances[smallerChild];
+            pq->distances[smallerChild] = tempDist;
+
+            index = smallerChild;
+        } else {
+            break;
+        }
+    }
+
+    return minNode;
 }
 
 void Dijkstra(Vector2D start, Vector2D end) {
@@ -59,14 +132,21 @@ void Dijkstra(Vector2D start, Vector2D end) {
     }
 
     dist[start.x][start.y] = 0;
+    PriorityQueue *pq = CreatePriorityQueue(GRID_WIDTH * GRID_HEIGHT);
+    Enqueue(pq, start, 0);
 
-    for (int count = 0; count < GRID_WIDTH * GRID_HEIGHT; count++) {
-        Vector2D u = GetMinDistanceNode(dist, sptSet);
-        if (u.x == -1 && u.y == -1) break;
+    while (!IsEmpty(pq)) {
+        Vector2D u = Dequeue(pq);
+        if (sptSet[u.x][u.y]) continue;
 
         sptSet[u.x][u.y] = true;
 
-        if (u.x == end.x && u.y == end.y) return; 
+        if (u.x == end.x && u.y == end.y) {
+            free(pq->nodes);
+            free(pq->distances);
+            free(pq);
+            return;
+        }
 
         Vector2D directions[] = {
             { 0, 1 }, { 0, -1 }, { 1, 0 }, { -1, 0 }
@@ -81,10 +161,15 @@ void Dijkstra(Vector2D start, Vector2D end) {
                 if (dist[u.x][u.y] + weight < dist[v.x][v.y]) {
                     dist[v.x][v.y] = dist[u.x][u.y] + weight;
                     grid[v.x][v.y].prev = u;
+                    Enqueue(pq, v, dist[v.x][v.y]);
                 }
             }
         }
     }
+
+    free(pq->nodes);
+    free(pq->distances);
+    free(pq);
 }
 
 void DrawShortestPath(Vector2D end) {
@@ -104,7 +189,6 @@ void HandleMouseInput(Vector2D *start, Vector2D *end, bool *recalculate) {
 
     if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
         if (gridX >= 0 && gridX < GRID_WIDTH && gridY >= 0 && gridY < GRID_HEIGHT) {
-
             grid[gridX][gridY].isWall = !grid[gridX][gridY].isWall;
             *recalculate = true;
         }
@@ -112,7 +196,6 @@ void HandleMouseInput(Vector2D *start, Vector2D *end, bool *recalculate) {
 
     if (IsMouseButtonPressed(MOUSE_RIGHT_BUTTON)) {
         if (gridX >= 0 && gridX < GRID_WIDTH && gridY >= 0 && gridY < GRID_HEIGHT) {
-
             if (IsKeyDown(KEY_LEFT_SHIFT)) {
                 *end = (Vector2D){ gridX, gridY };
             } else {
@@ -139,7 +222,6 @@ int main(void) {
     SetTargetFPS(60);
 
     while (!WindowShouldClose()) {
-
         HandleMouseInput(&start, &end, &recalculate);
 
         if (recalculate) {
@@ -149,7 +231,6 @@ int main(void) {
 
         BeginDrawing();
         ClearBackground(RAYWHITE);
-
 
         for (int i = 0; i < GRID_WIDTH; i++) {
             for (int j = 0; j < GRID_HEIGHT; j++) {
