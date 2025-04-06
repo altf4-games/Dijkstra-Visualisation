@@ -14,12 +14,13 @@ const DijkstraVisualizer = () => {
   const [mouseDown, setMouseDown] = useState(false);
   const [isShiftPressed, setIsShiftPressed] = useState(false);
   const [isCtrlPressed, setIsCtrlPressed] = useState(false); // For weight adjustment
-  const [visualizationSpeed, setVisualizationSpeed] = useState(20);
+  const [visualizationSpeed, setVisualizationSpeed] = useState(1000);
   const [isVisualizing, setIsVisualizing] = useState(false);
   const [currentlyAnimating, setCurrentlyAnimating] = useState([]);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [resetRequired, setResetRequired] = useState(false);
   const [showWeights, setShowWeights] = useState(true);
+  const [currentOperation, setCurrentOperation] = useState(null);
   const animationTimeouts = useRef([]);
 
   const sourceCode = `
@@ -206,20 +207,61 @@ const DijkstraVisualizer = () => {
     const newGrid = [...grid];
     const visitedNodesInOrder = [];
     const pq = new PriorityQueue();
+    const allOperations = []; // Track all algorithm operations in sequence
+
+    // Initialize
+    allOperations.push({
+      type: 'initialize',
+      position: { x: startPos.x, y: startPos.y },
+      message: 'Setting start node distance to 0'
+    });
 
     newGrid[startPos.x][startPos.y].distance = 0;
     pq.enqueue({ x: startPos.x, y: startPos.y }, 0);
+    
+    allOperations.push({
+      type: 'enqueue',
+      position: { x: startPos.x, y: startPos.y },
+      message: `Enqueue start node with priority 0`
+    });
 
     while (!pq.isEmpty()) {
       const { element: currentNode } = pq.dequeue();
       const { x, y } = currentNode;
+      
+      allOperations.push({
+        type: 'dequeue',
+        position: { x, y },
+        message: `Dequeue node (${x},${y}) with distance ${newGrid[x][y].distance}`
+      });
 
-      if (newGrid[x][y].isVisited) continue;
+      if (newGrid[x][y].isVisited) {
+        allOperations.push({
+          type: 'skip',
+          position: { x, y },
+          message: `Node already visited, skipping`
+        });
+        continue;
+      }
 
       newGrid[x][y].isVisited = true;
+      
+      allOperations.push({
+        type: 'visit',
+        position: { x, y },
+        message: `Mark node as visited, distance: ${newGrid[x][y].distance}`
+      });
+      
       visitedNodesInOrder.push({ x, y });
 
-      if (x === endPos.x && y === endPos.y) break;
+      if (x === endPos.x && y === endPos.y) {
+        allOperations.push({
+          type: 'found',
+          position: { x, y },
+          message: `End node found! Total distance: ${newGrid[x][y].distance}`
+        });
+        break;
+      }
 
       const neighbors = [
         { x: x - 1, y },
@@ -234,11 +276,23 @@ const DijkstraVisualizer = () => {
         if (nx >= 0 && nx < GRID_COLUMNS && ny >= 0 && ny < GRID_ROWS &&
             !newGrid[nx][ny].isVisited && !newGrid[nx][ny].isWall) {
           const newDistance = newGrid[x][y].distance + newGrid[nx][ny].weight;
+          
+          allOperations.push({
+            type: 'check',
+            position: { x: nx, y: ny },
+            message: `Checking neighbor (${nx},${ny}), current: ${newGrid[nx][ny].distance}, new: ${newDistance}`
+          });
 
           if (newDistance < newGrid[nx][ny].distance) {
             newGrid[nx][ny].distance = newDistance;
             newGrid[nx][ny].previousNode = { x, y };
             pq.enqueue({ x: nx, y: ny }, newDistance);
+            
+            allOperations.push({
+              type: 'update',
+              position: { x: nx, y: ny },
+              message: `Update distance to ${newDistance} and enqueue`
+            });
           }
         }
       });
@@ -253,47 +307,68 @@ const DijkstraVisualizer = () => {
       if (!current) break;
     }
 
-    animateAlgorithm(visitedNodesInOrder, path);
+    animateAlgorithm(visitedNodesInOrder, path, allOperations);
   };
 
-  const animateAlgorithm = (visitedNodesInOrder, path) => {
+  const animateAlgorithm = (visitedNodesInOrder, path, allOperations) => {
     clearAnimations();
 
-    visitedNodesInOrder.forEach((node, index) => {
+    // Animate all operations in sequence
+    allOperations.forEach((operation, index) => {
       const timeout = setTimeout(() => {
-        setGrid(prevGrid => {
-          const newGrid = prevGrid.map(col => col.map(cell => ({ ...cell })));
-          newGrid[node.x][node.y] = {
-            ...newGrid[node.x][node.y],
-            isAnimating: true,
-            isVisited: true,
-          };
-          return newGrid;
-        });
-
-        setCurrentlyAnimating(prev => [...prev, node]);
-
-        setTimeout(() => {
+        setCurrentOperation(operation);
+        
+        // Highlight the node associated with the operation
+        const { x, y } = operation.position;
+        
+        // Only modify the grid for certain operations
+        if (['visit', 'update', 'check'].includes(operation.type)) {
           setGrid(prevGrid => {
             const newGrid = prevGrid.map(col => col.map(cell => ({ ...cell })));
-            newGrid[node.x][node.y] = {
-              ...newGrid[node.x][node.y],
-              isAnimating: false,
+            
+            // Only mark as visited for 'visit' operations
+            if (operation.type === 'visit') {
+              newGrid[x][y].isVisited = true;
+            }
+            
+            newGrid[x][y] = {
+              ...newGrid[x][y],
+              isAnimating: true,
             };
             return newGrid;
           });
 
-          setCurrentlyAnimating(prev => prev.filter(n => n.x !== node.x || n.y !== node.y));
-        }, 300);
+          setCurrentlyAnimating(prev => [...prev, { x, y }]);
+
+          setTimeout(() => {
+            setGrid(prevGrid => {
+              const newGrid = prevGrid.map(col => col.map(cell => ({ ...cell })));
+              newGrid[x][y] = {
+                ...newGrid[x][y],
+                isAnimating: false,
+              };
+              return newGrid;
+            });
+
+            setCurrentlyAnimating(prev => prev.filter(n => n.x !== x || n.y !== y));
+          }, 300);
+        }
       }, index * visualizationSpeed);
 
       animationTimeouts.current.push(timeout);
     });
 
-    const pathStartTime = visitedNodesInOrder.length * visualizationSpeed + 100;
+    // Path animation starts after all operations
+    const pathStartTime = allOperations.length * visualizationSpeed + 100;
 
     path.forEach((node, index) => {
       const timeout = setTimeout(() => {
+        setCurrentOperation({
+          type: 'path',
+          position: { x: node.x, y: node.y },
+          message: `Path node (${node.x},${node.y}), part ${index + 1} of ${path.length}`
+        });
+        
         setGrid(prevGrid => {
           const newGrid = [...prevGrid];
           newGrid[node.x][node.y] = {
@@ -311,7 +386,7 @@ const DijkstraVisualizer = () => {
               ...newGrid[node.x][node.y],
               isAnimating: false,
             };
-            return newGrid;
+          return newGrid;
           });
 
           if (index === path.length - 1) {
@@ -397,6 +472,36 @@ const DijkstraVisualizer = () => {
     }
   };
 
+  const AlgorithmVisualizer = () => {
+    const getOperationColor = (type) => {
+      switch(type) {
+        case 'initialize': return 'bg-purple-100 border-purple-500';
+        case 'enqueue': return 'bg-green-100 border-green-500';
+        case 'dequeue': return 'bg-yellow-100 border-yellow-500';
+        case 'visit': return 'bg-blue-100 border-blue-500';
+        case 'check': return 'bg-gray-100 border-gray-500';
+        case 'update': return 'bg-orange-100 border-orange-500';
+        case 'found': return 'bg-red-100 border-red-500';
+        case 'path': return 'bg-yellow-100 border-yellow-500';
+        default: return 'bg-gray-50 border-gray-300';
+      }
+    };
+
+    return currentOperation ? (
+      <div className="mt-4 p-4 border-2 rounded-lg w-full max-w-4xl shadow-md animate-pulse">
+        <div className="flex items-center gap-3 mb-2">
+          <div className={`px-3 py-1 rounded-full text-sm font-medium ${getOperationColor(currentOperation.type)}`}>
+            {currentOperation.type.toUpperCase()}
+          </div>
+          <div className="font-mono">
+            Position: ({currentOperation.position.x}, {currentOperation.position.y})
+          </div>
+        </div>
+        <p className="text-gray-700">{currentOperation.message}</p>
+      </div>
+    ) : null;
+  };
+
   return (
     <div className="flex flex-col items-center p-4 bg-gradient-to-b from-slate-50 to-slate-100 min-h-screen">
       <h1 className="text-3xl font-bold mb-4 text-gray-800 drop-shadow-sm">Dijkstra's Pathfinding Visualizer</h1>
@@ -464,7 +569,7 @@ const DijkstraVisualizer = () => {
             <span className="w-16 text-center">{visualizationSpeed < 20 ? 'Fast' : visualizationSpeed < 50 ? 'Medium' : 'Slow'}</span>
           </div>
           
-          <div className="flex items-center gap-4">
+          {/* <div className="flex items-center gap-4">
             <label htmlFor="weights-toggle" className="font-medium text-gray-700 w-40">Show Node Weights:</label>
             <div className="relative inline-block w-12 h-6 rounded-full cursor-pointer">
               <input 
@@ -477,7 +582,7 @@ const DijkstraVisualizer = () => {
               <div className={`block w-12 h-6 rounded-full ${showWeights ? 'bg-blue-600' : 'bg-gray-300'} transition`}></div>
               <div className={`absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${showWeights ? 'transform translate-x-6' : ''}`}></div>
             </div>
-          </div>
+          </div> */}
         </div>
       </div>
       
@@ -609,6 +714,8 @@ const DijkstraVisualizer = () => {
           );
         }))}
       </div>
+      
+      {isVisualizing && <AlgorithmVisualizer />}
       
       <div className="mt-6 text-sm text-gray-500 flex items-center gap-2">
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v6.5"></path><path d="M18.4 19.5a9 9 0 1 1 0-15"></path><path d="M22 12h-6.5"></path></svg>
